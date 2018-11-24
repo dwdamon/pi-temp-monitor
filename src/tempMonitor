@@ -1,0 +1,87 @@
+#!/usr/bin/python3 -u
+
+import time;
+import datetime;
+import smtplib;
+import configparser;
+
+from decimal import *
+
+probePath = "/sys/bus/w1/devices/28-001898431564/w1_slave";
+oldStatus = "OK";
+
+def sendEmail( sender, recipient, subject, body, username, password ):
+  config = configparser.ConfigParser();
+  config.read( "./tempMonitor.cfg" );
+
+  monitorSection = "email";
+  emailOptions   = config[ monitorSection ];
+  sender         = emailOptions.get( 'sender' ); 
+  recipients     = emailOptions.get( 'recipients' ); 
+  subject        = emailOptions.get( 'subject' ); 
+  smtpServer     = emailOptions.get( 'smtpServer' );
+  username       = emailOptions.get( 'username' ); 
+  password       = emailOptions.get( 'password' ); 
+  msg            = "\r\n".join([ "From: " + sender,
+                                 "To: "   + recipients,
+                                 subject,
+                                 "",
+                                 body
+                              ]);
+
+  server         = smtplib.SMTP( smtpServer );
+
+  server.ehlo();
+  server.starttls();
+  server.login( username, password );
+  server.sendmail( sender, recipients, msg );
+  server.quit();
+  return;
+
+def checkTemperature( lowLimit, highLimit, sendAlerts ):
+  global probePath;
+  global oldStatus;
+
+  tempfile = open( probePath );
+  text     = tempfile.read();
+  status   = "OK";
+
+  tempfile.close();
+
+  tempdata    = text.split( "\n" )[ 1 ].split( " " )[ 9 ];
+  temperature = float( int(((( float( tempdata[ 2: ] )/1000 ) * 9/5 ) + 32 ) * 100 )/100 );
+
+  getcontext().prec = 2;
+
+  if( temperature > lowLimit and temperature < highLimit):
+    if( status != oldStatus and sendAlerts ):
+        sendEmail( "Temperature %3.2f fahrenheit is back in tolerance." % temperature );
+  elif( temperature <= lowLimit ):
+    status = "LOW";
+    if( status != oldStatus and sendAlerts ):
+      sendEmail( "Temperature %3.2f fahrenheit is too cold." % temperature );
+  elif( temperature >= highLimit ):
+    status = "HIGH";
+    if( status != oldStatus and sendAlerts ):
+      sendEmail( "Temperature %3.2f fahrenheit is too hot." % temperature );
+
+  now = datetime.datetime.now();
+  logEntry = "%s,%s,%3.2f,fahrenheit,%s" %( now.strftime( "%Y-%m-%d" ), now.strftime( "%H:%M:%S"), temperature, status );
+  print( logEntry );
+  oldStatus = status;
+
+while 1:
+  config = configparser.ConfigParser();
+  config.read( "./tempMonitor.cfg" );
+
+  monitorSection = "temperatureMonitor";
+  tempOptions = config[ monitorSection ];
+
+  low     = float( tempOptions.get( 'low',  "64.0" ));
+  high    = float( tempOptions.get( 'high', "78.5" ));
+  doAlert = tempOptions.getboolean( "sendNotifications", "True" );
+  delay   = int( tempOptions.get( 'delay', '60' ));
+
+  checkTemperature( low, high, doAlert );
+  time.sleep( delay );
+
